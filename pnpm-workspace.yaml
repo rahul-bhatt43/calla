@@ -1,0 +1,12 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# pnpm 10 blocks lifecycle scripts by default. These need to build native
+# binaries or download platform binaries at install time.
+onlyBuiltDependencies:
+  - "@node-rs/argon2"
+  - "@tailwindcss/oxide"
+  - "esbuild"
+  - "sharp"
+  - "uWebSockets.js"

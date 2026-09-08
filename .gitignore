@@ -1,0 +1,44 @@
+node_modules/
+.pnpm-store/
+
+# builds
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+
+# env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# turbo
+.turbo/
+
+# vendored ML weights — fetched by scripts/fetch-nsfw-model.mjs, ~5MB
+apps/web/public/models/
+
+# infra state
+infra/data/
+infra/caddy/data/
+infra/caddy/config/
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# editors / os
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# test output
+coverage/
+playwright-report/
+test-results/
+lighthouse-report/

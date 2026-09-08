@@ -1,0 +1,55 @@
+# =============================================================================
+# Caddy — TLS termination and routing
+# =============================================================================
+# Automatic HTTPS, HTTP/3, and a split between the Next.js app and the
+# WebSocket signaling server. Everything static is aggressively cached at the
+# edge: those are the SEO pages, and their Core Web Vitals are a ranking input.
+# =============================================================================
+
+{
+	email {$ACME_EMAIL:admin@localhost}
+	servers {
+		protocols h1 h2 h3
+	}
+}
+
+{$SITE_DOMAIN:localhost} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		# getUserMedia is the entire product; everything else is denied so a
+		# compromised dependency can't quietly reach for geolocation or payments.
+		Permissions-Policy "camera=(self), microphone=(self), geolocation=(), payment=(), usb=()"
+		-Server
+	}
+
+	# Signaling. The long read timeout matters: these sockets are idle between
+	# matches by design, and a default proxy timeout would sever them.
+	handle /ws* {
+		reverse_proxy signal:3001 {
+			transport http {
+				read_timeout 3600s
+				write_timeout 3600s
+			}
+		}
+	}
+
+	# Never expose internal metrics publicly.
+	handle /metrics* {
+		respond 404
+	}
+
+	# Immutable build assets — content-hashed filenames, so cache forever.
+	handle /_next/static/* {
+		header Cache-Control "public, max-age=31536000, immutable"
+		reverse_proxy web:3000
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+}

@@ -1,0 +1,43 @@
+{
+  "name": "call-me",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.6.3",
+  "engines": {
+    "node": ">=22"
+  },
+  "//volta": "Pinned, not advisory. uWebSockets.js ships prebuilt binaries per Node ABI and has none for Node 20 (ABI 115), so the signal server hard-fails to load on an older runtime. Pinning here makes every script use the same one.",
+  "volta": {
+    "node": "22.20.0",
+    "pnpm": "10.6.3"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "dev:fresh": "node scripts/free-ports.mjs && turbo run dev",
+    "ports": "node scripts/free-ports.mjs --dry",
+    "ports:free": "node scripts/free-ports.mjs",
+    "build": "turbo run build",
+    "start": "turbo run start",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "clean": "turbo run clean && rimraf node_modules",
+    "db:generate": "pnpm --filter @callme/db run generate",
+    "db:migrate": "pnpm --filter @callme/db run migrate",
+    "db:push": "pnpm --filter @callme/db run push",
+    "db:studio": "pnpm --filter @callme/db run studio",
+    "db:seed": "pnpm --filter @callme/db run seed",
+    "//infra": "--env-file is required: Compose resolves a bare .env relative to the compose file (infra/), not the repo root where ours lives.",
+    "infra:up": "docker compose --env-file .env -f infra/docker-compose.yml up -d",
+    "infra:down": "docker compose --env-file .env -f infra/docker-compose.yml down",
+    "infra:logs": "docker compose --env-file .env -f infra/docker-compose.yml logs -f",
+    "infra:prod": "docker compose --env-file .env -f infra/docker-compose.yml --profile prod up -d --build",
+    "format": "prettier --write \"**/*.{ts,tsx,js,json,md,css}\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "prettier": "^3.4.2",
+    "rimraf": "^6.0.1",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.3"
+  }
+}

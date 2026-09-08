@@ -1,0 +1,146 @@
+name: callme
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-callme}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-callme}
+      POSTGRES_DB: ${POSTGRES_DB:-callme}
+      # C collation is materially faster for the ASCII ids and hashes that make
+      # up almost every index in this schema.
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-callme}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    command:
+      - postgres
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=256MB
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - ./data/redis:/data
+    # noeviction is deliberate: the matchmaking queues live here, and silently
+    # evicting a queued user under memory pressure would strand them waiting
+    # forever with no error anywhere.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - "512mb"
+      - --maxmemory-policy
+      - "noeviction"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  coturn:
+    image: coturn/coturn:4.6-alpine
+    restart: unless-stopped
+    # On Linux, host networking is strongly preferred: coturn allocates relay
+    # ports dynamically and NAT-ing thousands of them through Docker's userland
+    # proxy is both slow and unreliable. Enable with `--profile linux-host`.
+    ports:
+      - "${TURN_PORT:-3478}:3478/udp"
+      - "${TURN_PORT:-3478}:3478/tcp"
+      - "${TURN_TLS_PORT:-5349}:5349/tcp"
+      # Dev keeps a deliberately small relay range. Production should widen this
+      # to 49160-49200 or more and use host networking.
+      - "49160-49200:49160-49200/udp"
+    volumes:
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+    command: ["-c", "/etc/coturn/turnserver.conf"]
+    environment:
+      TURN_SECRET: ${TURN_SECRET:-dev-turn-secret-change-me}
+
+  # ---------------------------------------------------------------------------
+  # Application services. Not started for local dev, where you run them with
+  # `pnpm dev` against the datastores above. Start the full stack with:
+  #   docker compose --profile prod up -d --build
+  # ---------------------------------------------------------------------------
+
+  web:
+    profiles: ["prod"]
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.web
+      args:
+        # Inlined into the client bundle at build time, so they are build args
+        # rather than runtime environment.
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
+        NEXT_PUBLIC_SIGNAL_URL: ${NEXT_PUBLIC_SIGNAL_URL:-ws://localhost:3001/ws}
+        DATABASE_URL: postgresql://${POSTGRES_USER:-callme}:${POSTGRES_PASSWORD:-callme}@postgres:5432/${POSTGRES_DB:-callme}
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-callme}:${POSTGRES_PASSWORD:-callme}@postgres:5432/${POSTGRES_DB:-callme}
+      REDIS_URL: redis://redis:6379
+      # Compose interpolates every service at parse time, including ones behind
+      # an inactive profile — so this guard fires even on a plain `infra:up`.
+      # The message therefore has to explain itself to someone who wasn't
+      # trying to start this service at all.
+      SESSION_SECRET: ${SESSION_SECRET:?not set. Run `cp .env.example .env` first, and use `pnpm infra:up` rather than a bare docker compose command}
+      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
+      NEXT_PUBLIC_SIGNAL_URL: ${NEXT_PUBLIC_SIGNAL_URL:-ws://localhost:3001/ws}
+
+  signal:
+    profiles: ["prod"]
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.signal
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment:
+      NODE_ENV: production
+      SIGNAL_PORT: 3001
+      DATABASE_URL: postgresql://${POSTGRES_USER:-callme}:${POSTGRES_PASSWORD:-callme}@postgres:5432/${POSTGRES_DB:-callme}
+      REDIS_URL: redis://redis:6379
+      # Must match coturn's static-auth-secret or every TURN allocation fails.
+      TURN_SECRET: ${TURN_SECRET:?not set. Run `cp .env.example .env` first, and use `pnpm infra:up` rather than a bare docker compose command}
+      TURN_HOST: ${TURN_HOST:-localhost}
+      TURN_REALM: ${TURN_REALM:-localhost}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+      EVIDENCE_DIR: /app/data/evidence
+    volumes:
+      - ./data/evidence:/app/data/evidence
+    # Scale out with `--scale signal=3`; nodes coordinate through Redis pub/sub
+    # and the matchmaker is atomic across all of them.
+
+  # Reverse proxy with automatic TLS. Not needed for local dev — start it with
+  # `docker compose --profile prod up -d`.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["prod"]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/data:/data
+      - ./caddy/config:/config
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:-localhost}

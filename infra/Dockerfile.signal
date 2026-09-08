@@ -1,0 +1,57 @@
+# syntax=docker/dockerfile:1.7
+# =============================================================================
+# Signaling server
+# =============================================================================
+# node:22-bookworm-slim rather than alpine, deliberately: uWebSockets.js ships
+# prebuilt binaries for glibc Linux only. On Alpine (musl) it fails to load at
+# runtime with an error that looks nothing like a libc problem, which is an
+# unpleasant hour to spend.
+# =============================================================================
+
+FROM node:22-bookworm-slim AS base
+RUN corepack enable
+WORKDIR /repo
+
+FROM base AS deps
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY apps/signal/package.json ./apps/signal/
+COPY packages/db/package.json ./packages/db/
+COPY packages/protocol/package.json ./packages/protocol/
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    pnpm install --frozen-lockfile --filter @callme/signal...
+
+FROM base AS build
+COPY --from=deps /repo/node_modules ./node_modules
+COPY --from=deps /repo/apps/signal/node_modules ./apps/signal/node_modules
+COPY --from=deps /repo/packages ./packages
+COPY package.json pnpm-workspace.yaml tsconfig.base.json ./
+COPY apps/signal ./apps/signal
+
+# The build bundles TypeScript to a single ESM file and copies the Lua scripts
+# beside it — matchmake.lua is read from disk at boot, so it has to travel with
+# the bundle rather than being inlined.
+RUN pnpm --filter @callme/signal run build
+
+FROM node:22-bookworm-slim AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+
+RUN groupadd -g 1001 nodejs && useradd -u 1001 -g nodejs -m signal
+
+# --packages=external leaves runtime deps unbundled, so node_modules ships too.
+COPY --from=build --chown=signal:nodejs /repo/node_modules ./node_modules
+COPY --from=build --chown=signal:nodejs /repo/apps/signal/node_modules ./apps/signal/node_modules
+COPY --from=build --chown=signal:nodejs /repo/apps/signal/dist ./dist
+COPY --from=build --chown=signal:nodejs /repo/packages ./packages
+
+# Report evidence lands here; mount a volume over it in production.
+RUN mkdir -p /app/data/evidence && chown -R signal:nodejs /app/data
+
+USER signal
+EXPOSE 3001
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+# Handles SIGTERM itself to drain websockets before exiting, so no init shim.
+CMD ["node", "dist/server.js"]

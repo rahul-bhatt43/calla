@@ -1,0 +1,73 @@
+# syntax=docker/dockerfile:1.7
+# =============================================================================
+# Next.js app
+# =============================================================================
+# Build context is the repository root, not apps/web — the app depends on three
+# workspace packages that ship raw TypeScript, so the whole workspace has to be
+# present for pnpm to link and Next to transpile them.
+# =============================================================================
+
+FROM node:22-alpine AS base
+RUN corepack enable
+WORKDIR /repo
+
+# --- dependencies ------------------------------------------------------------
+FROM base AS deps
+# Manifests only, so this layer is cached until a dependency actually changes.
+# Copying source first would invalidate the install on every edit.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY apps/web/package.json ./apps/web/
+COPY apps/signal/package.json ./apps/signal/
+COPY packages/db/package.json ./packages/db/
+COPY packages/ui/package.json ./packages/ui/
+COPY packages/protocol/package.json ./packages/protocol/
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    pnpm install --frozen-lockfile
+
+# --- build -------------------------------------------------------------------
+FROM base AS build
+COPY --from=deps /repo/node_modules ./node_modules
+COPY --from=deps /repo/apps/web/node_modules ./apps/web/node_modules
+COPY --from=deps /repo/packages ./packages
+COPY . .
+
+# See next.config.ts: standalone output is opt-in because it needs symlinks
+# that a Windows dev machine cannot create.
+ENV BUILD_STANDALONE=1
+ENV NEXT_TELEMETRY_DISABLED=1
+
+# NEXT_PUBLIC_* values are inlined into the client bundle at build time, so they
+# must be present here rather than only at runtime.
+ARG NEXT_PUBLIC_SITE_URL
+ARG NEXT_PUBLIC_SIGNAL_URL
+ENV NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL
+ENV NEXT_PUBLIC_SIGNAL_URL=$NEXT_PUBLIC_SIGNAL_URL
+
+# Interest pages are generated from the database at build time.
+ARG DATABASE_URL
+ENV DATABASE_URL=$DATABASE_URL
+
+RUN pnpm --filter @callme/web run build
+
+# --- runtime -----------------------------------------------------------------
+FROM node:22-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+
+RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
+
+# The standalone output carries only the modules actually traced as reachable,
+# which is a fraction of a full node_modules tree.
+COPY --from=build --chown=nextjs:nodejs /repo/apps/web/.next/standalone ./
+COPY --from=build --chown=nextjs:nodejs /repo/apps/web/.next/static ./apps/web/.next/static
+COPY --from=build --chown=nextjs:nodejs /repo/apps/web/public ./apps/web/public
+
+USER nextjs
+EXPOSE 3000
+ENV PORT=3000 HOSTNAME=0.0.0.0
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:3000/robots.txt').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+CMD ["node", "apps/web/server.js"]

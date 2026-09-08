@@ -1,0 +1,67 @@
+@import "tailwindcss";
+@import "@callme/ui/theme.css";
+
+/* Tailwind v4 only scans the importing project by default. The design system
+   lives in a sibling workspace package, so its class names have to be declared
+   as a source or every component ships without styles. */
+@source "../../../../packages/ui/src";
+
+@layer components {
+  /* Shared page rhythm for every marketing and content route. */
+  .container-page {
+    width: 100%;
+    max-width: 72rem;
+    margin-inline: auto;
+    padding-inline: 1.25rem;
+  }
+
+  .prose-content {
+    max-width: 42rem;
+    line-height: 1.75;
+  }
+  .prose-content h2 {
+    margin-block: 2.5rem 1rem;
+    font-size: 1.5rem;
+    font-weight: 650;
+  }
+  .prose-content h3 {
+    margin-block: 2rem 0.75rem;
+    font-size: 1.125rem;
+    font-weight: 620;
+  }
+  .prose-content p {
+    margin-block: 1rem;
+    color: var(--text-muted);
+  }
+  .prose-content ul {
+    margin-block: 1rem;
+    padding-left: 1.25rem;
+    list-style: disc;
+    color: var(--text-muted);
+  }
+  .prose-content li {
+    margin-block: 0.5rem;
+  }
+  .prose-content a {
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+}
+
+@layer utilities {
+  /* Wide content (tables, code) scrolls inside its own box so the page body
+     never scrolls sideways on a phone. */
+  .scroll-x {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  /* The soft violet wash behind the hero and the matchmaking overlay. */
+  .aurora {
+    background-image:
+      radial-gradient(60% 60% at 20% 10%, var(--accent-subtle) 0%, transparent 60%),
+      radial-gradient(50% 50% at 85% 25%, oklch(0.6 0.14 200 / 0.16) 0%, transparent 60%),
+      radial-gradient(40% 60% at 50% 100%, oklch(0.62 0.16 330 / 0.12) 0%, transparent 60%);
+  }
+}
